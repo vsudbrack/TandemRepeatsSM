@@ -1,0 +1,274 @@
+function (string)filename(integer id)
+{
+	x = "~/TandemRepeats/slim/data/Misalignment_withLoad_";
+	x = x + "_gamma=" + UnequalRecombination + "_mu=" + MutationRate;
+	x = x + "_N=" + PopSize + "_Sdiff=" + selPerDiff; // + "_Zopt=" + ZOPT;
+	return x + "_.txt";
+}
+
+function (void)printSubpop(io<Subpopulation>$ subpop, integer$ gen)
+{
+	MeanInd = subpop.individuals.sumOfMutationsOfType(m1) / 2.0;
+	zbar = mean(MeanInd);
+	varb = var(MeanInd);
+	vart = var(subpop.genomes.mutationsOfType(m1).selectionCoeff);
+	skew = skewness(subpop.genomes.mutationsOfType(m1).selectionCoeff);
+	kurt = kurtosis(subpop.genomes.mutationsOfType(m1).selectionCoeff);
+	load = satelliteLoad(subpop);
+	
+	writeFile(filename(1), paste(gen, subpop.id, subpop.selfingRate, zbar, varb, vart - varb, skew, kurt, load), append=T);
+}
+
+function (float)getVarianceBetween(io<Subpopulation>$ subpop)
+{
+	MeanInd = subpop.individuals.sumOfMutationsOfType(m1) / 2.0;
+	varb = var(MeanInd);
+	return varb;
+}
+
+function (float)getVarianceTotal(io<Subpopulation>$ subpop)
+{
+	vart = var(subpop.genomes.mutationsOfType(m1).selectionCoeff);
+	return vart;
+}
+
+function (float)skewness(numeric x)
+{
+	m = mean(x);
+	s = sd(x);
+	skew = (mean(x^3.0) - 3.0*m*s^2.0 - m^3.0)/s^3.0;
+	return skew;
+}
+
+function (float)kurtosis(numeric x)
+{
+	m = mean(x);
+	s = sd(x);
+	x = (x-m)/s;
+	kurt = mean(x^4.0);
+	return kurt;
+}
+
+function (float)satelliteLoad(io<Subpopulation>$ subpop)
+{
+	fmean = mean(subpop.individuals.fitnessScaling);
+	
+	if (SelectionModel == "Additive")     fmax = 1.0 - 2*selPerCopy;
+	if (SelectionModel == "Misalignment") fmax = 1.0 - 2*selPerCopy;
+	if (SelectionModel == "Stabilizing")  fmax = 1.0;
+	if (SelectionModel == "Stabilizing2")  fmax = 1.0;
+	if (SelectionModel == "Epistatic")    fmax = (PI - 2*atan(selSteep * (2 - 2*ZTHR) )) / (PI + 2.0*atan(2.0 * selSteep * ZTHR ));
+	if (SelectionModel == "Epistatic2")   fmax = (1.0 - selPerCopy)^((2/(2*ZTHR))^selSteep );
+	
+	return 1.0 - fmean / fmax;
+}
+
+initialize()
+{
+	if (exists("slimgui")) defineGlobal("UnequalRecombination", 0.1);
+	if (exists("slimgui")) defineGlobal("MutationRate", 0.001);
+	if (exists("slimgui")) defineGlobal("PopSize", 2000);
+	defineGlobal("NRep", asInteger(floor(20000 / PopSize)) );
+	
+	defineGlobal("SelectionModel", 'Stabilizing');
+	
+	if (SelectionModel == "Additive")
+	{
+		defineGlobal("selPerCopy", 0.001);
+		defineGlobal("DASHLINE", 2.0);
+		defineGlobal("YLIM", 1000);
+	} else if (SelectionModel == "Misalignment")
+	{
+		defineGlobal("selPerCopy", 0.001);
+		if (exists("slimgui")) defineGlobal("selPerDiff", 0.01);
+		defineGlobal("DASHLINE", 2.0);
+		defineGlobal("YLIM", 200);
+	} else if (SelectionModel == "Stabilizing")
+	{
+		if (exists("slimgui")) defineGlobal("selStab", 0.001);
+		defineGlobal("ZOPT", 5.0);
+		defineGlobal("DASHLINE", ZOPT);
+		defineGlobal("YLIM", 4*ZOPT);
+		defineGlobal("ZTHR", 1.0);
+	} else if (SelectionModel == "Stabilizing2") 
+	{
+		if (exists("slimgui")) defineGlobal("selStab", 0.01);
+		defineGlobal("ZOPT", 10.0);
+		defineGlobal("DASHLINE", ZOPT);
+		defineGlobal("YLIM", 4*ZOPT);
+	} else if (SelectionModel == "Epistatic")
+	{
+		if (exists("slimgui")) defineGlobal("selSteep", 50.0);
+		defineGlobal("ZTHR", 100);
+		defineGlobal("DASHLINE", ZTHR);
+		defineGlobal("YLIM", 2*ZTHR);
+	} else if (SelectionModel == "Epistatic2")
+	{
+		defineGlobal("selPerCopy", 0.001);
+		//defineGlobal("selSteep", 10.0);
+		defineGlobal("ZTHR", 100.0);
+		defineGlobal("DASHLINE", ZTHR);
+		defineGlobal("YLIM", 2*ZTHR);
+	}
+	
+	defineGlobal("HPI", PI / 2);
+	
+	initializeMutationRate(MutationRate);
+	initializeMutationType("m1", 0.5, "f", 0.0);
+	initializeGenomicElementType("g1", m1, 1.0);
+	initializeGenomicElement(g1, 0, 0);
+	initializeRecombinationRate(0.5);
+	m1.convertToSubstitution = F;
+	m1.mutationStackPolicy = "l";
+}
+
+/// Initialize population
+1 early()
+{
+	selfingList = c(0.0, 0.2, 0.4, 0.6, 0.8, 0.9, 0.95, 1.0);
+	//selfingList = c(0.0, 0.2, 0.5, 0.8, 1.0);
+	i=0;
+	for(r in seqLen(NRep))
+		for(alpha in selfingList){
+			p = sim.addSubpop(i, PopSize);
+			p.setSelfingRate(alpha);
+			i = i+1;
+		}
+	// Start genomes
+	sim.subpopulations.genomes.addNewMutation(m1, ZOPT, 0);
+}
+
+/// Fitness effects of TR repeats
+mutationEffect(m1)
+{
+	return 1.0;
+}
+
+1: late()
+{
+	z1 = sim.subpopulations.individuals.genome1.sumOfMutationsOfType(m1);
+	z2 = sim.subpopulations.individuals.genome2.sumOfMutationsOfType(m1);
+	
+	if (SelectionModel == "Additive")
+	{
+		fits = 1.0 - selPerCopy*(z1+z2);
+	}
+	
+	if (SelectionModel == "Misalignment")
+	{
+		fits1 = 1.0 - selPerCopy*(z1+z2);
+		fits2 = 1.0 - selPerDiff*abs(z1-z2)/(z1+z2);
+		fits = ifelse(fits1>0, fits1, 0.0)*ifelse(fits2>0, fits2, 0.0);
+	}
+	
+	if (SelectionModel == "Stabilizing")
+	{
+		fits1 = 1.0 - selStab*(ZOPT - z1)^2;
+		fits2 = 1.0 - selStab*(ZOPT - z2)^2;
+		fits = ifelse(fits1>0, fits1, 0.0)*ifelse(fits2>0, fits2, 0.0);
+	}
+	
+	if (SelectionModel == "Stabilizing2")
+	{
+		fits = 1.0 - selStab*(2*ZOPT - z1 - z2)^2;
+	}
+	
+	if (SelectionModel == "Epistatic")
+	{
+		fits = (PI - 2*atan(selSteep * (z1+z2 - 2*ZTHR) )) / (PI + 2.0*atan(2.0 * selSteep * ZTHR ));
+		//fits2 = 1.0; (PI - 2*atan(selSteep * (z2 - ZTHR) * PI)) / (PI + 2*atan(selSteep * ZTHR * PI));
+		//fits = ifelse(fits1>0, fits1, 0.0)*ifelse(fits2>0, fits2, 0.0);
+	}
+	
+	if (SelectionModel == "Epistatic2")
+	{
+		fits = (1.0 - selPerCopy)^( ((z1+z2)/(2*ZTHR))^selSteep );
+	}
+	
+	sim.subpopulations.individuals.fitnessScaling = pmax(0.0, fits);
+}
+
+mutation(m1)
+{
+	if (runif(1) < 0.5)
+		return F; // Outter chromatids are not amplified
+	
+	// Saltatory Amplification
+	OldLength = asInteger(genome.mutationsOfType(m1).selectionCoeff);
+	NewLength = rdunif(1, OldLength + 1, 2 * OldLength);
+	mut.setSelectionCoeff(1.0 * NewLength);
+	return T;
+}
+
+modifyChild()
+{
+	if (runif(1) < UnequalRecombination / 2.0)
+	{ // Genome1
+		TotalCopies = asInteger(parent1.sumOfMutationsOfType(m1));
+		RecombinedLength = asInteger(round(mean(rdunif(2, 1, TotalCopies - 1) + runif(1, -0.1, 0.1))));
+		child.genome1.addNewMutation(m1, RecombinedLength, 0);
+	}
+	if (runif(1) < UnequalRecombination / 2.0)
+	{ // Same thing for Genome2
+		TotalCopies = asInteger(parent2.sumOfMutationsOfType(m1));
+		RecombinedLength = asInteger(round(mean(rdunif(2, 1, TotalCopies - 1) + runif(1, -0.1, 0.1))));
+		child.genome2.addNewMutation(m1, RecombinedLength, 0);
+	}
+	return T;
+}
+
+seq(2, 1250002, 250) late() /* Plotting */
+{
+	if (!exists("slimgui")){
+		for (pop in sim.subpopulations) printSubpop(pop, sim.cycle);
+		return;
+	}
+	
+	gen = sim.cycle;
+	
+	if (gen == 2)
+	{
+		defineGlobal("RSCRIPT", "/usr/local/bin/rscript");
+		defineConstant("pngPath", writeTempFile("plot_", ".png", ""));
+		slimgui.openDocument(pngPath);
+		defineConstant("pngPath2", writeTempFile("plot_", ".png", ""));
+		slimgui.openDocument(pngPath2);
+		defineConstant("pngPath3", writeTempFile("plot_", ".png", ""));
+		slimgui.openDocument(pngPath3);
+		defineConstant("pngPath4", writeTempFile("plot_", ".png", ""));
+		slimgui.openDocument(pngPath4);
+	}
+	
+	TRs = sim.subpopulations.individuals.sumOfMutationsOfType(m1)/2;
+	PIs = sim.subpopulations.individuals.subpopulation.selfingRate;
+	rstr = paste('{x <- c(' + paste(TRs, sep=", ") + ')', 'y <- c(' + paste(PIs, sep=", ") + ')', 'mean_values=tapply(x,y,mean)', 'png(width=6, height=6, units="in", res=92, file="' + pngPath + '")', 'par(mar=c(4.0, 4.0, 1.5, 1.5))', 'data = data.frame(x, y)', 'boxplot(data$x ~ data$y, ylim = c(1,'+ YLIM +'), xlab="Selfing rate", ylab="TR copy number")', 'points(mean_values, col = "red", pch = 19)', 'abline(h=' + DASHLINE + ', col="gray", lwd=1, lty="dashed")', 'box()', 'dev.off()', '}', sep=";");
+	scriptPath = writeTempFile("plot_", ".R", rstr);
+	system(RSCRIPT, args=scriptPath);
+	deleteFile(scriptPath);
+	
+	
+	VarT = sapply(sim.subpopulations, "getVarianceTotal(applyValue);");
+	PIs = sim.subpopulations.selfingRate;
+	rstr = paste('{x <- c(' + paste(sqrt(VarT), sep=", ") + ')', 'y <- c(' + paste(PIs, sep=", ") + ')', 'png(width=4, height=4, units="in", res=92, file="' + pngPath2 + '")', 'par(mar=c(4.0, 4.0, 1.5, 1.5))', 'data = data.frame(x, y)', 'boxplot(data$x ~ data$y, ylim = c(1,'+ YLIM/2 +'), xlab="Selfing rate", ylab="Total Std. Dev.")', 'abline(h=' + sqrt((ZTHR-1)^2/12) + ', col="gray", lwd=1, lty="dashed")', 'box()', 'dev.off()', '}', sep=";");
+	scriptPath = writeTempFile("plot_", ".R", rstr);
+	system(RSCRIPT, args=scriptPath);
+	deleteFile(scriptPath);
+	
+	selfingPops = sim.subpopulations[sim.subpopulations.selfingRate>=0.9];
+	TRs = selfingPops.genomes.mutationsOfType(m1).selectionCoeff;
+	rstr = paste('{x <- c(' + paste(TRs, sep=", ") + ')', 'png(width=3, height=3, units="in", res=92, file="' + pngPath3 + '")', 'par(mar=c(4.0, 4.0, 1.5, 1.5))', 'hist(x, breaks = seq(0, 30), xlab="TRs in selfing populations", ylab="Count")', 'box()', 'dev.off()', '}', sep=";");
+	scriptPath = writeTempFile("plot_", ".R", rstr);
+	system(RSCRIPT, args=scriptPath);
+	deleteFile(scriptPath);
+	
+	selfingPops = sim.subpopulations[sim.subpopulations.selfingRate<=0.1];
+	TRs = selfingPops.genomes.mutationsOfType(m1).selectionCoeff;
+	rstr = paste('{x <- c(' + paste(TRs, sep=", ") + ')', 'png(width=3, height=3, units="in", res=92, file="' + pngPath4 + '")', 'par(mar=c(4.0, 4.0, 1.5, 1.5))', 'hist(x, breaks = seq(0, 30), xlab="TRs in outcrossing populations", ylab="Count")', 'box()', 'dev.off()', '}', sep=";");
+	scriptPath = writeTempFile("plot_", ".R", rstr);
+	system(RSCRIPT, args=scriptPath);
+	deleteFile(scriptPath);
+
+
+}
+
+50000 late() { sim.simulationFinished(); }

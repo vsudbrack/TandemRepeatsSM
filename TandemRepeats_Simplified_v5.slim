@@ -1,0 +1,201 @@
+/// # Tandem repeats modelled on SLiM
+// This SLiM simulation models the evolution of tandem repeats under replication slippage and unequal recombination. 
+// Each mutation carries an integer tag representing the repeat copy number for a focal TR sequence.
+// TR copy number can expand via saltatory amplification (mutation callback) or can change due to unequal recombination (modifyChild callback). 
+// Individual's fitness decreases with total repeat number in an individual. 
+// The simulation tracks summary statistics and plots the distribution of repeat copy numbers over time on SLiMgui.
+
+/***/
+/// ## Initialize simulation and population
+initialize()
+{
+	// Define some constants of the model (only in SLiMgui)
+	if (exists("slimgui")) defineConstant("UNEQUAL_RECOMBINATION_RATE", 0.01);
+	if (exists("slimgui")) defineConstant("MUTATION_RATE", 0.01);
+	if (exists("slimgui")) defineConstant("POPULATION_SIZE", 10000 );
+	if (exists("slimgui")) defineConstant("SELFING_RATE", 0.0);
+	
+	// Additive selection against extra repeats
+	defineConstant("SELECTION_PER_COPY", 0.0001);
+	
+	// Start single mutation type	
+	initializeMutationRate(MUTATION_RATE);
+	initializeMutationType("m1", 0.5, "f", 0.0);
+	// These mutations are neutral on fitness and
+	// they carry an integer tag which is the copy number
+	// of the focal sequence at that position
+	
+	// Start single genomic element - single locus
+	initializeGenomicElementType("g1", m1, 1.0);
+	initializeGenomicElement(g1, 0, 0);
+	initializeRecombinationRate(0.0);
+	
+	// Standart settings for modeling traits
+	m1.convertToSubstitution = F;
+	m1.mutationStackPolicy = "l";
+	
+	// For printing or plotting
+	if(exists('slimgui')){
+		defineGlobal("RSCRIPT", "/usr/local/bin/rscript");
+		defineConstant("pngPath", writeTempFile("plot_", ".png", ""));
+		slimgui.openDocument(pngPath);
+	} else {
+		// Sets the header of the data file
+		writeFile(filename('subpop'), paste('GEN', 'POP', 'SELF', 'MEAN', 'VARB', 'VARW', 'SKEW', 'KURT', 'LOAD'));
+	}
+}
+
+1 late()
+{
+	// Creates the population and sets selfing rate
+	sim.addSubpop(1, POPULATION_SIZE);
+	sim.subpopulations.setSelfingRate(SELFING_RATE);
+	
+	// Start all genomes with the same mutation, and a copy number close to theoretical steady state
+	muts = sim.subpopulations.haplosomes.addNewDrawnMutation(m1, 0);
+	muts.tag = asInteger(1.0 + 0.5 * MUTATION_RATE / SELECTION_PER_COPY);
+}
+
+/***/
+/// ## Calculating fitness manually
+late()
+{	
+	// Get TR copy numbers z1 and z2
+	z1 = sim.subpopulations.individuals.haploidGenome1.mutationsOfType(m1).tag;
+	z2 = sim.subpopulations.individuals.haploidGenome2.mutationsOfType(m1).tag;
+	
+	// Calculates fecundity
+	fits = 1.0 - SELECTION_PER_COPY*( z1 + z2 );
+	
+	// Set as individual fitness
+	sim.subpopulations.individuals.fitnessScaling = pmax(0.0, fits);
+}
+
+/***/
+/// ## Saltatory Amplification
+mutation(m1) {
+	previousLength = haplosome.mutationsOfType(m1).tag;
+	
+	// The added length supposes that the replication machinary detached ay any point and started over
+	// Therefore, increases are sample from a uniform distribution between 1 and previousLength
+	newLength = previousLength + rdunif(1, 1, previousLength);
+	mut.tag = newLength;
+	
+	// Always accept the mutation
+	return T;
+}
+
+/***/
+/// ## Unequal recombination
+modifyChild() {	
+	// Child's Genome1 from Parent1 had unequally recombined
+	if (runif(1) < UNEQUAL_RECOMBINATION_RATE / 2.0){
+		// Get parental Tr copy numbers
+		previousCopies = parent1.haplosomes.mutationsOfType(m1).tag;
+		
+		// Unequal recombination assumes a crossover equally likely across the two TR sequences
+		recombinedLength = rdunif(1, 1, previousCopies[0] - 1) + rdunif(1, 1, previousCopies[1] - 1);
+		
+		// Adds a new mutation and sets its tag to the new TR copy number
+		mut = child.haploidGenome1.addNewDrawnMutation(m1, 0);
+		mut.tag = recombinedLength;
+	}
+	
+	// Child's Genome2 from Parent2 had unequally recombined (same as above for Parent1)
+	if (runif(1) < UNEQUAL_RECOMBINATION_RATE / 2.0){
+		previousCopies = parent2.haplosomes.mutationsOfType(m1).tag;
+		recombinedLength = rdunif(1, 1, previousCopies[0] - 1) + rdunif(1, 1, previousCopies[1] - 1);
+		mut = child.haploidGenome2.addNewDrawnMutation(m1, 0);
+		mut.tag = recombinedLength;
+	}
+	
+	// Always accept the child
+	return T;
+}
+/***/
+
+/// ## Printing or plotting
+seq(2, 1e7, 250) late()
+{
+	/// Printing outside SLiMgui
+	if (!exists("slimgui")){
+		for (pop in sim.subpopulations) printSubpop(pop, sim.cycle);
+		return;
+	}
+	
+	/// Plotting within SLiMgui
+	gen = sim.cycle;
+	TRs = sim.subpopulations.individuals.haplosomes.mutationsOfType(m1).tag;
+	TRbar = mean(TRs);
+	catn(TRbar);
+	
+	rstr = paste('{x <- c(' + paste(TRs, sep=", ") + ')', 'png(width=6, height=6, units="in", res=92, file="' + pngPath + '")', 'par(mar=c(4.0, 4.0, 1.5, 1.5))', 'hist(x, breaks = seq(0.5,'+ max(10 * MUTATION_RATE / SELECTION_PER_COPY, max(TRs)+1.0) +', 2), xlab="TR copy number", ylab="Count", main = "Histogram - Gen. ' + gen + '")', 'abline(v='+TRbar+', col = "red", lty = 2)', 'box()', 'dev.off()', '}', sep=";");
+	scriptPath = writeTempFile("plot_", ".R", rstr);
+	system(RSCRIPT, args=scriptPath);
+	deleteFile(scriptPath);
+
+}
+
+/***/
+50000 late() /* Ends simulation */ { sim.simulationFinished(); }
+
+/***/
+/// ## User-defined functions 
+function (string)filename(string$ type)
+{
+	// Main folder
+	x = "~/TandemRepeats/slim/data/AdditiveCase_";
+	
+	// Add tags for file type
+	if(type == 'subpop') x = x + "subpopInfo_";
+	if(type == 'inds') x = x + "individualInfo_";
+	
+	// Add all relevant parameter values
+	x = x + "_gamma=" + UNEQUAL_RECOMBINATION_RATE;
+	x = x + "_mu=" + MUTATION_RATE;
+	x = x + "_alpha=" + SELFING_RATE;
+	x = x + "_N=" + POPULATION_SIZE;
+	x = x + "_sa=" + SELECTION_PER_COPY;
+	return x + "_.txt";
+}
+
+function (void)printSubpop(io<Subpopulation>$ subpop, integer$ gen)
+{
+	// Calculate various statistics at the population level
+	TRs  = subpop.haplosomes.mutationsOfType(m1).tag;
+	zbar = mean(TRs);
+	vart = var(TRs);
+	skew = skewness(TRs);
+	kurt = kurtosis(TRs);
+	load = satelliteLoad(subpop);
+	varb = var(sapply(subpop.individuals,"mean(applyValue.haplosomes.mutationsOfType(m1).tag);"));
+	
+	line = paste(gen, subpop.id, subpop.selfingRate, zbar, varb, vart - varb, skew, kurt, load);
+	writeFile(filename('subpop'), line, append=T);
+}
+
+function (float)skewness(numeric x)
+{
+	m = mean(x);
+	s = sd(x);
+	x = (x-m)/s;
+	skew = mean(x^3.0);
+	return skew;
+}
+
+function (float)kurtosis(numeric x)
+{
+	m = mean(x);
+	s = sd(x);
+	x = (x-m)/s;
+	kurt = mean(x^4.0);
+	return kurt;
+}
+
+function (float)satelliteLoad(io<Subpopulation>$ subpop)
+{
+	fmean = mean(subpop.individuals.fitnessScaling);
+	fmax = 1.0 - 2*SELECTION_PER_COPY;
+	
+	return 1.0 - fmean / fmax;
+}
