@@ -1,5 +1,4 @@
-# Supplementary Material for  
-*The evolution of tandem repeat sequences under partial selfing and different modes of selection*
+# Supplementary Material for *The evolution of tandem repeat sequences under partial selfing and different modes of selection*
 
 This repository contains the SLiM simulation scripts and Mathematica notebooks used in the analyses presented in:
 
